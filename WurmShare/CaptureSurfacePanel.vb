@@ -43,7 +43,7 @@ Public Class CaptureSurfacePanel
     ' the nub stays the same physical hit target regardless of how tall the
     ' bars get above it.
     Public Const NubSize As Integer = 10
-    Public Const MinimumPanelWidth As Integer = 30
+    Public Const MinimumPanelWidth As Integer = 16
 
     Private ReadOnly _hpStamBox As PictureBox
     Private ReadOnly _favorBox As PictureBox
@@ -104,11 +104,11 @@ Public Class CaptureSurfacePanel
         Me.Controls.AddRange(New Control() {_hpStamBox, _favorBox, _foodBox,
                                             _waterBox, _resizeNub})
 
-        ' Default size. Width is a starting guess; height is the minimum
-        ' (sum of all base bar heights plus the nub strip). Both can be
-        ' grown by the user via the nub or via code; SetBoundsCore enforces
-        ' the minimums.
-        Me.Size = New Size(200, MinimumPanelHeight)
+        ' Default size: 1.0x scale on the height axis (every bar at its base
+        ' pixel height) and a comfortable starting width. The user can shrink
+        ' well below this via the nub - SetBoundsCore clamps only at the
+        ' absolute MinimumPanelHeight floor, which is much smaller than this.
+        Me.Size = New Size(200, BasePanelHeight)
 
         Me.ResumeLayout(False)
         ApplyLayout()
@@ -210,16 +210,42 @@ Public Class CaptureSurfacePanel
     ' =========================================================================
 
     ''' <summary>
-    ''' Minimum total panel height for the current bar configuration. Equals
-    ''' the sum of all visible base bar heights plus the nub strip — i.e.
-    ''' the size at which every bar is at its 1.0x base height.
+    ''' Height of the panel at 1.0x scale — the sum of all visible base bar
+    ''' heights plus the nub strip. This is what the constructor uses for the
+    ''' initial size: a "comfortable default" where every bar is at its base
+    ''' pixel height with no proportional shrinking applied.
     ''' </summary>
     <Browsable(False)>
-    Public ReadOnly Property MinimumPanelHeight As Integer
+    Public ReadOnly Property BasePanelHeight As Integer
         Get
             Dim h As Integer = BaseHealthStaminaHeight + BaseFoodWaterHeight + NubSize
             If _favorVisible Then h += BaseFavorHeight
             Return h
+        End Get
+    End Property
+
+    ''' <summary>
+    ''' Absolute minimum total panel height the user / code can shrink to.
+    ''' Computed so the proportional layout still gives every visible bar at
+    ''' least one row of pixels (anything less and the analyser has nothing
+    ''' to sample). Far smaller than <see cref="BasePanelHeight"/>: bars are
+    ''' allowed to scale well below their base heights so the surface can
+    ''' overlay tiny in-game UI bars while keeping the bars' ratios intact.
+    '''
+    ''' Math: barArea must hold sumOfBases / smallestBase rows for every bar
+    ''' to round to ≥ 1 after Round(base * scale); add the fixed nub strip.
+    ''' </summary>
+    <Browsable(False)>
+    Public ReadOnly Property MinimumPanelHeight As Integer
+        Get
+            Dim sumOfBases As Integer = BaseHealthStaminaHeight + BaseFoodWaterHeight
+            Dim smallestBase As Integer = Math.Min(BaseHealthStaminaHeight, BaseFoodWaterHeight)
+            If _favorVisible Then
+                sumOfBases += BaseFavorHeight
+                smallestBase = Math.Min(smallestBase, BaseFavorHeight)
+            End If
+            Dim minBarArea As Integer = CInt(Math.Ceiling(sumOfBases / CDbl(smallestBase)))
+            Return minBarArea + NubSize
         End Get
     End Property
 
