@@ -27,7 +27,7 @@ Public Class WurmShare_Overlay
     Dim HoldWidth As Integer
     Dim HoldHeight As Integer
 
-    Dim API_Client_Version As String = "1.0.0"
+    Dim API_Client_Version As String = "1.0.2"
     Dim API_Available_Version As String
     Dim API_Update_Required As Boolean = False
 
@@ -459,6 +459,12 @@ Public Class WurmShare_Overlay
 #Region "Update Functions"
     Private Sub CheckForUpdates(server_url As String)
         Dim UpdateCheckCurrent As String = API_Request("ver", server_url).Replace("""", "").Trim()
+        If String.IsNullOrEmpty(UpdateCheckCurrent) Then
+            ' Couldn't reach the version endpoint - skip the check this run
+            ' rather than fall through to the "update available" UI with no
+            ' actual version string to show.
+            Return
+        End If
         If UpdateCheckCurrent = API_Client_Version Then
             'Do nothing, we are up to date.
         Else
@@ -467,15 +473,32 @@ Public Class WurmShare_Overlay
             'We need to now get the minimum supported client version from the server, and check if the running version is greater than that.
             Dim forceupdflag As Boolean = False
             Dim UpdateCheckMinimum As String = API_Request("minver", server_url).Replace("""", "").Trim()
-            Dim versubsself() As String = API_Client_Version.Split(".")
-            Dim versubs() As String = UpdateCheckMinimum.Split(".")
-            If CInt(versubs(0)) > CInt(versubsself(0)) Then
+
+            ' Defensive parse: server might return junk, an empty body, or a
+            ' version with fewer than 3 segments (or extras like "1.0.2-beta").
+            ' Integer.TryParse leaves the target at 0 on failure, Length-guarded
+            ' indexing handles short arrays, so neither FormatException nor
+            ' IndexOutOfRangeException can reach the caller. The previous
+            ' CInt(versubs(N)) on raw split parts was the unhandled exception
+            ' reported by end users on Host / Join.
+            Dim minMajor As Integer = 0, minMinor As Integer = 0, minPatch As Integer = 0
+            Dim selfMajor As Integer = 0, selfMinor As Integer = 0, selfPatch As Integer = 0
+            Dim minParts() As String = UpdateCheckMinimum.Split("."c)
+            Dim selfParts() As String = API_Client_Version.Split("."c)
+            If minParts.Length > 0 Then Integer.TryParse(minParts(0), minMajor)
+            If minParts.Length > 1 Then Integer.TryParse(minParts(1), minMinor)
+            If minParts.Length > 2 Then Integer.TryParse(minParts(2), minPatch)
+            If selfParts.Length > 0 Then Integer.TryParse(selfParts(0), selfMajor)
+            If selfParts.Length > 1 Then Integer.TryParse(selfParts(1), selfMinor)
+            If selfParts.Length > 2 Then Integer.TryParse(selfParts(2), selfPatch)
+
+            If minMajor > selfMajor Then
                 forceupdflag = True
             End If
-            If CInt(versubs(1)) > CInt(versubsself(1)) And CInt(versubs(0)) >= CInt(versubsself(0)) Then
+            If minMinor > selfMinor And minMajor >= selfMajor Then
                 forceupdflag = True
             End If
-            If CInt(versubs(2)) > CInt(versubsself(2)) And CInt(versubs(1)) >= CInt(versubsself(1)) Then
+            If minPatch > selfPatch And minMinor >= selfMinor Then
                 forceupdflag = True
             End If
             If forceupdflag = True Then
@@ -538,7 +561,7 @@ Public Class WurmShare_Overlay
             My.Computer.FileSystem.WriteAllBytes(My.Application.Info.DirectoryPath & "\WurmShare.temp", GetURLDataBin("https://github.com/Jason-Bloomer/WurmShare/releases/download/v" & API_Available_Version & "/WurmShare.exe"), False)
             Dim My_Process As New Process()
             Dim My_Process_Info As New ProcessStartInfo()
-            Dim strPath As String = My.Application.Info.DirectoryPath & "\DUOM-update.bat"
+            Dim strPath As String = My.Application.Info.DirectoryPath & "\WurmShare-update.bat"
             Dim swDestruct As StreamWriter = New StreamWriter(strPath)
             swDestruct.WriteLine("PING localhost -n 3 >NUL && taskkill /F /IM ""WurmShare.exe"" && PING localhost -n 6 >NUL && del """ & My.Application.Info.DirectoryPath & "\WurmShare.exe"" && ren """ & My.Application.Info.DirectoryPath & "\WurmShare.temp"" """ & "WurmShare.exe"" && del """ & strPath & """ && PING localhost -n 3 >NUL  && """ & My.Application.Info.DirectoryPath & "\WurmShare.exe""")
             swDestruct.Close()
@@ -556,7 +579,7 @@ Public Class WurmShare_Overlay
     End Sub
 
     '############################## - Version API Request Constructor - ##############################
-    Private Function API_Request(ByVal reqtype As String, ByVal addr As String)
+    Private Function API_Request(ByVal reqtype As String, ByVal addr As String) As String
         Try
             Dim requestUrl As String = Nothing
             If reqtype = "ver" Then
@@ -574,6 +597,7 @@ Public Class WurmShare_Overlay
             Return TempResponse
         Catch ex As Exception
             AddEvent("[net] Error when making API request: " & ex.Message)
+            Return ""
         End Try
     End Function
 #End Region
@@ -610,13 +634,13 @@ Public Class WurmShare_Overlay
 #End Region
 
 #Region "PictureBox UI Control Click&Drag Functions"
-    Private Sub Movable_MouseUp(ByVal sender As Object, ByVal e As MouseEventArgs) Handles MainButton.MouseUp, MasterPanelResizeGrabber.MouseUp, Button3.MouseUp, Button4.MouseUp, Button5.MouseUp
+    Private Sub Movable_MouseUp(ByVal sender As Object, ByVal e As MouseEventArgs) Handles MainButton.MouseUp, MasterPanelResizeGrabber.MouseUp, Button3.MouseUp, Button4.MouseUp, Button5.MouseUp, Button8.MouseUp
         Go = False
         LeftSet = False
         TopSet = False
     End Sub
 
-    Private Sub Movable_MouseDown(ByVal sender As Object, ByVal e As MouseEventArgs) Handles MainButton.MouseDown, MasterPanelResizeGrabber.MouseDown, Button3.MouseDown, Button4.MouseDown, Button5.MouseDown
+    Private Sub Movable_MouseDown(ByVal sender As Object, ByVal e As MouseEventArgs) Handles MainButton.MouseDown, MasterPanelResizeGrabber.MouseDown, Button3.MouseDown, Button4.MouseDown, Button5.MouseDown, Button8.MouseDown
         Go = True
     End Sub
 
@@ -648,7 +672,7 @@ Public Class WurmShare_Overlay
         End If
     End Sub
 
-    Private Sub Movable_MouseMove2(ByVal sender As Object, ByVal e As MouseEventArgs) Handles Button3.MouseMove, Button4.MouseMove, Button5.MouseMove
+    Private Sub Movable_MouseMove2(ByVal sender As Object, ByVal e As MouseEventArgs) Handles Button3.MouseMove, Button4.MouseMove, Button5.MouseMove, Button8.MouseMove
         ' Check if the mouse is down
         If Go = True Then
 
