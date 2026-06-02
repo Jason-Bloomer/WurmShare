@@ -27,7 +27,7 @@ Public Class WurmShare_Overlay
     Dim HoldWidth As Integer
     Dim HoldHeight As Integer
 
-    Dim API_Client_Version As String = "1.0.2"
+    Dim API_Client_Version As String = "1.0.3"
     Dim API_Available_Version As String
     Dim API_Update_Required As Boolean = False
 
@@ -465,52 +465,66 @@ Public Class WurmShare_Overlay
             ' actual version string to show.
             Return
         End If
-        If UpdateCheckCurrent = API_Client_Version Then
-            'Do nothing, we are up to date.
+
+        ' Parse the server's latest version and our local client version into
+        ' integer triples. String equality on the raw strings is fragile - a
+        ' stray BOM, trailing whitespace the Trim() doesn't recognise, JSON
+        ' formatting quirks, or any non-numeric server-side reformatting
+        ' makes two equivalent versions look unequal and triggers a false
+        ' "update available" popup. Numeric comparison ignores all of that.
+        Dim latMajor As Integer = 0, latMinor As Integer = 0, latPatch As Integer = 0
+        Dim selfMajor As Integer = 0, selfMinor As Integer = 0, selfPatch As Integer = 0
+        Dim latParts() As String = UpdateCheckCurrent.Split("."c)
+        Dim selfParts() As String = API_Client_Version.Split("."c)
+        If latParts.Length > 0 Then Integer.TryParse(latParts(0).Trim(), latMajor)
+        If latParts.Length > 1 Then Integer.TryParse(latParts(1).Trim(), latMinor)
+        If latParts.Length > 2 Then Integer.TryParse(latParts(2).Trim(), latPatch)
+        If selfParts.Length > 0 Then Integer.TryParse(selfParts(0).Trim(), selfMajor)
+        If selfParts.Length > 1 Then Integer.TryParse(selfParts(1).Trim(), selfMinor)
+        If selfParts.Length > 2 Then Integer.TryParse(selfParts(2).Trim(), selfPatch)
+
+        ' Client at-or-ahead of latest published version => no prompt.
+        ' Handles the original false-positive ("equal but stringly unequal")
+        ' AND the previously-impossible case of being ahead of the server.
+        Dim clientAtOrAhead As Boolean =
+            (selfMajor > latMajor) OrElse
+            (selfMajor = latMajor AndAlso selfMinor > latMinor) OrElse
+            (selfMajor = latMajor AndAlso selfMinor = latMinor AndAlso selfPatch >= latPatch)
+        If clientAtOrAhead Then
+            Return
+        End If
+
+        ' Client is genuinely behind. Pull the minimum-supported version and
+        ' decide whether the update is forced (we're below the floor) or just
+        ' optional (we're between min and latest).
+        API_Available_Version = UpdateCheckCurrent
+        Dim UpdateCheckMinimum As String = API_Request("minver", server_url).Replace("""", "").Trim()
+
+        Dim minMajor As Integer = 0, minMinor As Integer = 0, minPatch As Integer = 0
+        Dim minParts() As String = UpdateCheckMinimum.Split("."c)
+        If minParts.Length > 0 Then Integer.TryParse(minParts(0).Trim(), minMajor)
+        If minParts.Length > 1 Then Integer.TryParse(minParts(1).Trim(), minMinor)
+        If minParts.Length > 2 Then Integer.TryParse(minParts(2).Trim(), minPatch)
+
+        ' forceupdflag = (min > self) under proper semver ordering. The
+        ' previous boolean chain compared patch against patch while only
+        ' guarding on minor (no major check), so a client AHEAD of the
+        ' minimum's major could still be force-updated. Replaced with a
+        ' single nested compare that's correct at every level.
+        Dim forceupdflag As Boolean =
+            (minMajor > selfMajor) OrElse
+            (minMajor = selfMajor AndAlso minMinor > selfMinor) OrElse
+            (minMajor = selfMajor AndAlso minMinor = selfMinor AndAlso minPatch > selfPatch)
+
+        If forceupdflag = True Then
+            RequireUpdate()
         Else
-            'Current version and running version do not match.
-            API_Available_Version = UpdateCheckCurrent
-            'We need to now get the minimum supported client version from the server, and check if the running version is greater than that.
-            Dim forceupdflag As Boolean = False
-            Dim UpdateCheckMinimum As String = API_Request("minver", server_url).Replace("""", "").Trim()
-
-            ' Defensive parse: server might return junk, an empty body, or a
-            ' version with fewer than 3 segments (or extras like "1.0.2-beta").
-            ' Integer.TryParse leaves the target at 0 on failure, Length-guarded
-            ' indexing handles short arrays, so neither FormatException nor
-            ' IndexOutOfRangeException can reach the caller. The previous
-            ' CInt(versubs(N)) on raw split parts was the unhandled exception
-            ' reported by end users on Host / Join.
-            Dim minMajor As Integer = 0, minMinor As Integer = 0, minPatch As Integer = 0
-            Dim selfMajor As Integer = 0, selfMinor As Integer = 0, selfPatch As Integer = 0
-            Dim minParts() As String = UpdateCheckMinimum.Split("."c)
-            Dim selfParts() As String = API_Client_Version.Split("."c)
-            If minParts.Length > 0 Then Integer.TryParse(minParts(0), minMajor)
-            If minParts.Length > 1 Then Integer.TryParse(minParts(1), minMinor)
-            If minParts.Length > 2 Then Integer.TryParse(minParts(2), minPatch)
-            If selfParts.Length > 0 Then Integer.TryParse(selfParts(0), selfMajor)
-            If selfParts.Length > 1 Then Integer.TryParse(selfParts(1), selfMinor)
-            If selfParts.Length > 2 Then Integer.TryParse(selfParts(2), selfPatch)
-
-            If minMajor > selfMajor Then
-                forceupdflag = True
-            End If
-            If minMinor > selfMinor And minMajor >= selfMajor Then
-                forceupdflag = True
-            End If
-            If minPatch > selfPatch And minMinor >= selfMinor Then
-                forceupdflag = True
-            End If
-            If forceupdflag = True Then
-                RequireUpdate()
-            Else
-                'Running version is above minimum server requirements, but is still not the latest.
-                UpdateNotifPanel.Location = New Point((Me.Size.Width / 2) - (UpdateNotifPanel.Size.Width / 2), (Me.Size.Height / 2) - (UpdateNotifPanel.Size.Height / 2))
-                UpdateButton1.Visible = True
-                UpdateButton2.Visible = True
-                UpdateNotifText.Text = "An update (Version " & API_Available_Version & ") for WurmShare is available, but not required. Download?"
-                UpdateNotifPanel.Visible = True
-            End If
+            'Running version is above minimum server requirements, but is still not the latest.
+            UpdateNotifPanel.Location = New Point((Me.Size.Width / 2) - (UpdateNotifPanel.Size.Width / 2), (Me.Size.Height / 2) - (UpdateNotifPanel.Size.Height / 2))
+            UpdateButton1.Visible = True
+            UpdateButton2.Visible = True
+            UpdateNotifText.Text = "An update (Version " & API_Available_Version & ") for WurmShare is available, but not required. Download?"
+            UpdateNotifPanel.Visible = True
         End If
     End Sub
 
